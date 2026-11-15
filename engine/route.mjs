@@ -27,13 +27,27 @@ for (const [id, n] of Object.entries(spec.nodes)) {
 for (const h of spec.headers) new A.ShapeRef(router, rect(h));
 
 let classId = 1;
-const end = (pin) => {
-  const s = shapes[pin.node];
-  const [x1, y1, x2, y2] = s.box[pin.shape];
+const attach = (shape, box, pin) => {
+  const [x1, y1, x2, y2] = box;
   const id = classId++;
-  const p = new A.ShapeConnectionPin(s[pin.shape], id, (pin.x - x1) / (x2 - x1), (pin.y - y1) / (y2 - y1), true, 0, DIR[pin.side]);
+  const p = new A.ShapeConnectionPin(shape, id, (pin.x - x1) / (x2 - x1), (pin.y - y1) / (y2 - y1), true, 0, DIR[pin.side]);
   p.setExclusive(false);
-  return new A.ConnEnd(s[pin.shape], id);
+  return new A.ConnEnd(shape, id);
+};
+// 枠を障害物にすると中へ線が通れないので、枠線の内側の小さな図形につなぐ
+const frameBox = ({ x, y, side }) => ({
+  top: [x - 2, y, x + 2, y + 2],
+  bottom: [x - 2, y - 2, x + 2, y],
+  left: [x, y - 2, x + 2, y + 2],
+  right: [x - 2, y - 2, x, y + 2],
+})[side];
+const end = (pin) => {
+  if (pin.shape === 'frame') {
+    const box = frameBox(pin);
+    return attach(new A.ShapeRef(router, rect(box)), box, pin);
+  }
+  const s = shapes[pin.node];
+  return attach(s[pin.shape], s.box[pin.shape], pin);
 };
 
 const conns = spec.edges.map((e) => new A.ConnRef(router, end(e.pins[0]), end(e.pins[1])));

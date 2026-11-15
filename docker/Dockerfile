@@ -17,3 +17,12 @@ RUN curl -fsSL -o /tmp/icons.zip "$ICONS_URL" \
  && find /tmp/icons -path '*__MACOSX*' -prune -o -type f \( -name '*_48.svg' -o -name '*_48_Light.svg' -o -path '*Group-Icons*_32.svg' \) -print \
     | grep -v '_Dark' | xargs -I{} cp {} icons/ \
  && rm -rf /tmp/icons /tmp/icons.zip
+
+ARG K8S_ICONS_URL=https://raw.githubusercontent.com/kubernetes/community/70a4bb2d8cc35bb0672f221bad9bc60c27a6f94b/icons/svg
+RUN mkdir icons/k8s \
+ && for n in c-role cm crb crd cronjob deploy ds ep group hpa ing job limits netpol ns pod psp pv pvc quota rb role rs sa sc secret sts svc user vol; do \
+      curl -fsSL -o "icons/k8s/$n.svg" "$K8S_ICONS_URL/resources/unlabeled/$n.svg" || exit 1; \
+    done \
+ && for n in control-plane etcd node; do \
+      curl -fsSL -o "icons/k8s/$n.svg" "$K8S_ICONS_URL/infrastructure_components/unlabeled/$n.svg" || exit 1; \
+    done

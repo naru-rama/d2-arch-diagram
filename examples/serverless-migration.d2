@@ -1,0 +1,152 @@
+direction: down
+
+people: "" {
+  class: plain
+  grid-columns: 3
+  users: 利用者 {class: users}
+  dev: 開発者 {class: user}
+  iam: "IAM\nスイッチロール" {class: identity-and-access-management}
+}
+
+main: "" {
+  class: plain
+  grid-columns: 2
+
+  ci: "" {
+    class: plain
+    gha: "GitHub Actions\nビルド" {class: git-repository}
+  }
+
+  aws: AWS Cloud {
+    class: aws-cloud
+
+    front: "" {
+      class: plain
+      grid-columns: 5
+      waf: "WAF\n不正通信を検査" {class: waf}
+      f1: {class: spacer}
+      route53: "Route 53\n名前解決" {class: route-53}
+      f2: {class: spacer}
+      f3: {class: spacer}
+      f4: {class: spacer}
+      apigw: "API Gateway\nAPI の入口" {class: api-gateway}
+      f5: {class: spacer}
+      cloudfront: "CloudFront\n配信の入口" {class: cloudfront}
+      s3web: "S3\n静的コンテンツ" {class: s3}
+      cognito: "Cognito\nJWT 認証" {class: cognito}
+      f6: {class: spacer}
+      acm: "ACM\nTLS 証明書" {class: certificate-manager}
+      f7: {class: spacer}
+      amplify: "Amplify\nフロントエンド" {class: amplify}
+    }
+
+    band: "" {
+      class: plain
+      grid-columns: 3
+
+      west: "" {
+        class: plain
+        s3files: "S3\nファイル保管" {class: s3}
+        sqs: "SQS\n非同期処理" {class: sqs}
+        scheduler: "EventBridge Scheduler\n定期起動" {class: eventbridge-scheduler}
+        params: "Parameter Store\n環境変数" {class: systems-manager-parameter-store}
+        ecr: "ECR\nイメージ" {class: ecr}
+      }
+
+      vpc: VPC {
+        class: vpc
+        igw: Internet Gateway {class: internet-gateway}
+
+        public: パブリックサブネット {
+          class: public-subnet
+          grid-columns: 3
+          p1: {class: spacer}
+          ops: "" {
+            class: plain
+            grid-columns: 2
+            nat: "EC2\nNAT" {class: ec2}
+            bastion: "EC2\n踏み台" {class: ec2}
+          }
+          p2: {class: spacer}
+          p3: {class: spacer}
+          p4: {class: spacer}
+          alb: "ALB\nHTTPS を終端" {class: [alb; legacy]}
+        }
+
+        private: プライベートサブネット {
+          class: private-subnet
+          grid-columns: 3
+
+          lambda: Lambda {
+            class: generic
+            api: "Lambda\nAPI 処理" {class: lambda}
+            worker: "Lambda\n非同期ワーカー" {class: lambda}
+            batch: "Lambda\nバッチ処理" {class: lambda}
+          }
+          db: "" {
+            class: plain
+            grid-columns: 2
+            proxy: "RDS Proxy\nDB 接続を共有" {class: rds-proxy-instance}
+            rds: "RDS for PostgreSQL\nデータを保存" {class: rds}
+          }
+          ecs: ECS クラスター {
+            class: [generic; legacy]
+            api: "ECS\nAPI 処理" {class: [ecs; legacy]}
+            worker: "ECS\n非同期ワーカー" {class: [ecs; legacy]}
+            batch: "ECS\nバッチ処理" {class: [ecs; legacy]}
+          }
+        }
+      }
+
+      east: "" {
+        class: plain
+        session: "Session Manager\nポート転送" {class: systems-manager-session-manager}
+        logs: "CloudWatch\nログと指標" {class: cloudwatch}
+        ses: "SES\nメール配信" {class: ses}
+      }
+
+      p2: {class: spacer}
+      below: "" {
+        class: plain
+        secrets: "Secrets Manager\nDB 認証情報" {class: secrets-manager}
+      }
+    }
+  }
+}
+
+people.users -> main.aws.front.apigw {class: [from-left; to-top]}
+people.users -> main.aws.front.cloudfront {class: [from-right; to-top]}
+main.aws.front.waf -> main.aws.front.apigw {class: [dashed; from-bottom; to-left]}
+main.aws.front.cognito -> main.aws.front.apigw {class: [dashed; from-top; to-left]}
+main.aws.front.route53 -> main.aws.front.apigw {class: [dashed; from-bottom; to-right]}
+main.aws.front.route53 -> main.aws.front.cloudfront {class: [dashed; from-bottom; to-left]}
+main.aws.front.acm -> main.aws.front.apigw {class: [dashed; from-top; to-right]}
+main.aws.front.acm -> main.aws.front.cloudfront {class: [dashed; from-top; to-left]}
+main.aws.front.cloudfront -> main.aws.front.s3web
+main.aws.front.cloudfront -> main.aws.front.amplify {class: [from-bottom; to-left]}
+
+main.aws.front.apigw -> main.aws.band.vpc.private.lambda.api
+main.aws.band.vpc.private.lambda.api -> main.aws.band.west.s3files
+main.aws.band.vpc.private.lambda.api -> main.aws.band.west.sqs
+main.aws.band.west.sqs -> main.aws.band.vpc.private.lambda.worker
+main.aws.band.west.scheduler -> main.aws.band.vpc.private.lambda.batch
+main.aws.band.west.params -> main.aws.band.vpc.private.lambda {class: [dashed; from-right; to-bottom]}
+main.aws.band.west.ecr -> main.aws.band.vpc.private.lambda {class: [dashed; from-right; to-bottom]}
+main.ci.gha -> main.aws.band.west.ecr {class: dashed}
+main.aws.band.vpc.private.lambda.api -> main.aws.band.vpc.public.ops.nat {class: [from-right; to-bottom]}
+main.aws.band.vpc.public.ops.nat -> main.aws.band.vpc.igw
+main.aws.band.vpc.private.lambda -> main.aws.band.vpc.private.db.proxy
+main.aws.band.vpc.private.db.proxy -> main.aws.band.vpc.private.db.rds
+main.aws.band.below.secrets -> main.aws.band.vpc.private.db.proxy {class: dashed}
+
+people.dev -> people.iam {class: dashed}
+people.dev -> main.aws.band.east.session
+main.aws.band.east.session -> main.aws.band.vpc.public.ops.bastion
+main.aws.band.vpc.public.ops.bastion -> main.aws.band.vpc.private.db.rds
+main.aws.band.vpc -> main.aws.band.east.logs {class: dashed}
+
+main.aws.front.cloudfront -> main.aws.band.vpc.igw {class: [dashed; legacy]}
+main.aws.band.vpc.igw -> main.aws.band.vpc.public.alb {class: [legacy; from-right; to-top]}
+main.aws.band.vpc.public.alb -> main.aws.band.vpc.private.ecs.api {class: legacy}
+main.aws.band.vpc.private.ecs -> main.aws.band.vpc.private.db.rds {class: [dashed; legacy]}
+main.aws.band.vpc.private.ecs -> main.aws.band.east.ses {class: [dashed; legacy]}

@@ -3,6 +3,7 @@
 Arch_AWS-Lambda_48.svg -> lambda
 Res_Amazon-VPC_NAT-Gateway_48.svg -> vpc-nat-gateway
 Res_Users_48_Light.svg -> users
+k8s/pod.svg -> k8s-pod
 """
 import os
 import re
@@ -26,6 +27,20 @@ ALIASES = {
     "igw": "vpc-internet-gateway",
     "internet-gateway": "vpc-internet-gateway",
     "internet": "internet-alt1",
+    "k8s-deployment": "k8s-deploy",
+    "k8s-service": "k8s-svc",
+    "k8s-ingress": "k8s-ing",
+    "k8s-namespace": "k8s-ns",
+    "k8s-statefulset": "k8s-sts",
+    "k8s-daemonset": "k8s-ds",
+    "k8s-replicaset": "k8s-rs",
+    "k8s-configmap": "k8s-cm",
+    "k8s-serviceaccount": "k8s-sa",
+    "k8s-persistentvolume": "k8s-pv",
+    "k8s-persistentvolumeclaim": "k8s-pvc",
+    "k8s-storageclass": "k8s-sc",
+    "k8s-networkpolicy": "k8s-netpol",
+    "k8s-endpoints": "k8s-ep",
 }
 
 GROUP_FILES = {
@@ -40,6 +55,11 @@ GROUP_FILES = {
     "server-contents": "Server-contents_32.svg",
     "ec2-instance-contents": "EC2-instance-contents_32.svg",
     "spot-fleet": "Spot-Fleet_32.svg",
+    "k8s-cluster": "k8s/control-plane.svg",
+    "k8s-namespace": "k8s/ns.svg",
+    "k8s-node": "k8s/node.svg",
+    "k8s-pod": "k8s/pod.svg",
+    "k8s-deployment": "k8s/deploy.svg",
 }
 
 
@@ -74,6 +94,11 @@ def build(icon_dir):
         if key and (key not in found or rank < found[key][0]):
             found[key] = (rank, filename)
     table = {k: v[1] for k, v in found.items()}
+    k8s_dir = os.path.join(icon_dir, "k8s")
+    if os.path.isdir(k8s_dir):
+        for filename in sorted(os.listdir(k8s_dir)):
+            if filename.endswith(".svg"):
+                table[f"k8s-{filename[:-4]}"] = f"k8s/{filename}"
     for alias, target in ALIASES.items():
         if target in table and alias not in table:
             table[alias] = table[target]

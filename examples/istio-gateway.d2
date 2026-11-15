@@ -1,0 +1,158 @@
+direction: down
+
+users: 利用者 {class: users}
+
+aws: AWS Cloud {
+  class: aws-cloud
+
+  ext: "" {
+    class: plain
+    grid-columns: 3
+    route53: "Route 53\n名前解決" {class: route-53}
+    x1: {class: spacer}
+    acm: "ACM\nTLS 証明書" {class: certificate-manager}
+  }
+
+  vpc: VPC {
+    class: vpc
+    igw: Internet Gateway {class: internet-gateway}
+
+    public: パブリックサブネット {
+      class: public-subnet
+      alb: "ALB\nTLS 終端" {class: alb}
+      tg: ターゲットグループ istio {
+        class: generic
+        ips: "" {
+          class: plain
+          grid-columns: 2
+          ip1: Pod IP {class: vpc-elastic-network-interface}
+          ip2: Pod IP {class: vpc-elastic-network-interface}
+        }
+      }
+    }
+
+    private: プライベートサブネット {
+      class: private-subnet
+
+      eks: EKS クラスター {
+        class: k8s-cluster
+
+        entry: "" {
+          class: plain
+          grid-columns: 3
+
+        kube: kube-system {
+          class: k8s-namespace
+          ctrl: "Pod\nALB Controller" {class: k8s-pod}
+        }
+
+        ingress: istio-ingress {
+          class: k8s-namespace
+          grid-columns: 3
+          ing: Ingress {class: k8s-ingress}
+          gw: "Deployment istio-ingressgateway" {
+            class: k8s-deployment
+            grid-columns: 2
+            p1: "Pod\nEnvoy" {class: k8s-pod}
+            p2: "Pod\nEnvoy" {class: k8s-pod}
+          }
+          gateway: "Gateway\nルーティングを定義" {class: k8s-crd}
+        }
+
+        c1: {class: spacer}
+        }
+
+        apps: "" {
+          class: plain
+          grid-columns: 3
+
+        svc_a: service-a {
+          class: k8s-namespace
+          grid-columns: 3
+          vs: VirtualService {class: k8s-crd}
+          svc: "Service\nClusterIP" {class: k8s-service}
+          a1: {class: spacer}
+          a2: {class: spacer}
+          dep: Deployment {
+            class: k8s-deployment
+            grid-columns: 2
+            pod1: Pod {
+              class: k8s-pod
+              grid-columns: 2
+              envoy: Envoy {class: elastic-container-service-container-1}
+              api: API {class: elastic-container-service-container-2}
+            }
+            pod2: Pod {
+              class: k8s-pod
+              grid-columns: 2
+              envoy: Envoy {class: elastic-container-service-container-1}
+              api: API {class: elastic-container-service-container-2}
+            }
+          }
+          a3: {class: spacer}
+        }
+
+        system: istio-system {
+          class: k8s-namespace
+          istiod: "Pod\nistiod" {class: k8s-pod}
+        }
+
+        svc_b: service-b {
+          class: k8s-namespace
+          grid-columns: 3
+          vs: VirtualService {class: k8s-crd}
+          svc: "Service\nClusterIP" {class: k8s-service}
+          a1: {class: spacer}
+          a2: {class: spacer}
+          dep: Deployment {
+            class: k8s-deployment
+            grid-columns: 2
+            pod1: Pod {
+              class: k8s-pod
+              grid-columns: 2
+              envoy: Envoy {class: elastic-container-service-container-1}
+              api: API {class: elastic-container-service-container-2}
+            }
+            pod2: Pod {
+              class: k8s-pod
+              grid-columns: 2
+              envoy: Envoy {class: elastic-container-service-container-1}
+              api: API {class: elastic-container-service-container-2}
+            }
+          }
+          a3: {class: spacer}
+        }
+        }
+      }
+    }
+  }
+}
+
+users -> aws.ext.route53 {class: [from-left; to-top]}
+users -> aws.vpc.igw: HTTPS
+aws.vpc.igw -> aws.vpc.public.alb
+aws.ext.acm -> aws.vpc.public.alb {class: [dashed; from-bottom; to-right]}
+aws.vpc.public.alb -> aws.vpc.public.tg: リスナールール
+aws.vpc.public.tg.ips.ip1 -> aws.vpc.private.eks.entry.ingress.gw.p1
+aws.vpc.public.tg.ips.ip2 -> aws.vpc.private.eks.entry.ingress.gw.p2
+
+aws.vpc.private.eks.entry.kube.ctrl -> aws.vpc.public.tg: Pod IP を登録 {class: [dashed; from-top; to-left]}
+aws.vpc.private.eks.entry.kube.ctrl -> aws.vpc.private.eks.entry.ingress.ing: 監視 {class: dashed}
+aws.vpc.private.eks.entry.ingress.gateway -> aws.vpc.private.eks.entry.ingress.gw {class: dashed}
+
+aws.vpc.private.eks.entry.ingress.gw -> aws.vpc.private.eks.apps.svc_a.svc
+aws.vpc.private.eks.entry.ingress.gw -> aws.vpc.private.eks.apps.svc_b.svc
+aws.vpc.private.eks.apps.svc_a.vs -> aws.vpc.private.eks.apps.svc_a.svc {class: dashed}
+aws.vpc.private.eks.apps.svc_b.vs -> aws.vpc.private.eks.apps.svc_b.svc {class: dashed}
+aws.vpc.private.eks.apps.svc_a.svc -> aws.vpc.private.eks.apps.svc_a.dep.pod1.envoy
+aws.vpc.private.eks.apps.svc_a.svc -> aws.vpc.private.eks.apps.svc_a.dep.pod2.envoy
+aws.vpc.private.eks.apps.svc_b.svc -> aws.vpc.private.eks.apps.svc_b.dep.pod1.envoy
+aws.vpc.private.eks.apps.svc_b.svc -> aws.vpc.private.eks.apps.svc_b.dep.pod2.envoy
+aws.vpc.private.eks.apps.svc_a.dep.pod1.envoy -> aws.vpc.private.eks.apps.svc_a.dep.pod1.api
+aws.vpc.private.eks.apps.svc_a.dep.pod2.envoy -> aws.vpc.private.eks.apps.svc_a.dep.pod2.api
+aws.vpc.private.eks.apps.svc_b.dep.pod1.envoy -> aws.vpc.private.eks.apps.svc_b.dep.pod1.api
+aws.vpc.private.eks.apps.svc_b.dep.pod2.envoy -> aws.vpc.private.eks.apps.svc_b.dep.pod2.api
+
+aws.vpc.private.eks.apps.system.istiod -> aws.vpc.private.eks.entry.ingress.gw: 設定を配信 {class: dashed}
+aws.vpc.private.eks.apps.system.istiod -> aws.vpc.private.eks.apps.svc_a.dep: 設定を配信 {class: dashed}
+aws.vpc.private.eks.apps.system.istiod -> aws.vpc.private.eks.apps.svc_b.dep: 設定を配信 {class: dashed}

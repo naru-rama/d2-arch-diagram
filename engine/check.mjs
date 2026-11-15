@@ -144,7 +144,7 @@ const result = await page.evaluate((flow) => {
           if (longest >= HUG_LEN) add('矢印が枠線に沿っている', `${name} × 枠 ${short(c.id)}（${longest}px）`);
         }
 
-        const needed = ancestors(e.src).includes(c.id) !== ancestors(e.dst).includes(c.id) ? 1 : 0;
+        const needed = ancestors(e.src).includes(c.id) !== ancestors(e.dst).includes(c.id) || c.id === e.src || c.id === e.dst ? 1 : 0;
         let crossings = 0;
         for (let i = 1; i < e.pts.length; i++) {
           if (inside(e.pts[i - 1], r) !== inside(e.pts[i], r)) crossings++;
@@ -271,50 +271,80 @@ const result = await page.evaluate((flow) => {
       }
     }
 
-    const azs = Object.values(containers).filter((c) => c.kinds.includes('az')).sort((a, b) => a.rect.x1 - b.rect.x1);
-    if (azs.length === 2) {
-      const [A, B] = azs;
-      const map = (id) => (id.startsWith(A.id + '.') ? B.id + id.slice(A.id.length) : id);
-      const wa = A.rect.x2 - A.rect.x1;
-      const wb = B.rect.x2 - B.rect.x1;
-      const ha = A.rect.y2 - A.rect.y1;
-      const hb = B.rect.y2 - B.rect.y1;
-      if (Math.abs(wa - wb) > 2 || Math.abs(ha - hb) > 2 || Math.abs(A.rect.y1 - B.rect.y1) > 2) {
-        add('対になる枠の大きさや高さがそろっていない', `${short(A.id)} と ${short(B.id)}`);
+    const parentOf = (id) => (id.includes('.') ? id.slice(0, id.lastIndexOf('.')) : '');
+    const kindOf = (c) => c.kinds.filter((k) => k !== 'group').sort().join(' ');
+    const allIds = [...Object.keys(nodes), ...Object.keys(containers)];
+    const innerOf = (c) => allIds.filter((id) => id.startsWith(c.id + '.')).map((id) => id.slice(c.id.length + 1)).sort().join('|');
+    const anchorOf = (id) => (nodes[id] && nodes[id].icon ? mid(nodes[id].icon) : containers[id] ? mid(containers[id].rect) : null);
+    const buckets = {};
+    for (const c of Object.values(containers)) {
+      const inner = innerOf(c);
+      if (inner) (buckets[`${parentOf(c.id)}#${kindOf(c)}#${inner}`] ||= []).push(c);
+    }
+    for (const group of Object.values(buckets)) {
+      if (group.length < 2) continue;
+      const row = new Set(group.map((c) => Math.round(c.rect.y1))).size === 1;
+      const members = [...group].sort((a, b) => (row ? a.rect.x1 - b.rect.x1 : a.rect.y1 - b.rect.y1));
+      const first = members[0];
+      const size = (c) => ({ w: c.rect.x2 - c.rect.x1, h: c.rect.y2 - c.rect.y1 });
+      for (const m of members.slice(1)) {
+        const aligned = row ? Math.abs(m.rect.y1 - first.rect.y1) <= 2 : Math.abs(m.rect.x1 - first.rect.x1) <= 2;
+        if (Math.abs(size(m).w - size(first).w) > 2 || Math.abs(size(m).h - size(first).h) > 2 || !aligned) {
+          add('対になる枠の大きさや位置がそろっていない', `${short(first.id)} と ${short(m.id)}`);
+        }
       }
+      const mapTo = (m, id) => (id.startsWith(first.id + '.') ? m.id + id.slice(first.id.length) : id);
       for (const n of placed) {
-        if (!n.id.startsWith(A.id + '.')) continue;
-        const m = nodes[map(n.id)];
-        if (!m || !m.icon) continue;
-        const pa = mid(n.icon);
-        const pb = mid(m.icon);
-        if (Math.abs(pa.x - A.rect.x1 - (pb.x - B.rect.x1)) > 2 || Math.abs(pa.y - A.rect.y1 - (pb.y - B.rect.y1)) > 2) {
-          add('対になる位置がそろっていない', short(n.id));
+        if (!n.id.startsWith(first.id + '.')) continue;
+        for (const m of members.slice(1)) {
+          const t = nodes[mapTo(m, n.id)];
+          if (!t || !t.icon) continue;
+          const pa = mid(n.icon);
+          const pb = mid(t.icon);
+          if (Math.abs(pa.x - first.rect.x1 - (pb.x - m.rect.x1)) > 2 || Math.abs(pa.y - first.rect.y1 - (pb.y - m.rect.y1)) > 2) {
+            add('対になる位置がそろっていない', `${short(n.id)}（${short(m.id)}）`);
+          }
         }
       }
-      const axis = (mid(A.rect).x + mid(B.rect).x) / 2;
+      const compare = (a, b, move) => {
+        const moved = a.pts.map(move);
+        const off = moved.filter((p) => !b.pts.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 3)).length;
+        if (off > moved.length * 0.05) add('対になる矢印が対称でない', `${edgeName(a)} と ${edgeName(b)}`);
+      };
       for (const e of edges) {
-        const inA = [e.src, e.dst].map((id) => id.startsWith(A.id + '.'));
-        if (!inA.some(Boolean)) continue;
-        const twin = edges.find((o) => o !== e && o.src === map(e.src) && o.dst === map(e.dst));
-        if (!twin) continue;
-        let move;
-        if (inA.every(Boolean)) move = (p) => ({ x: p.x + B.rect.x1 - A.rect.x1, y: p.y + B.rect.y1 - A.rect.y1 });
-        else {
-          const shared = inA[0] ? e.dst : e.src;
-          if (Math.abs(mid(nodes[shared].icon).x - axis) > 2) continue;
-          move = (p) => ({ x: 2 * axis - p.x, y: p.y });
+        const inFirst = [e.src, e.dst].map((id) => id.startsWith(first.id + '.'));
+        if (!inFirst.some(Boolean)) continue;
+        const twins = members.map((m) => edges.find((o) => o.src === mapTo(m, e.src) && o.dst === mapTo(m, e.dst)));
+        if (twins.some((t) => !t)) continue;
+        if (inFirst.every(Boolean)) {
+          members.slice(1).forEach((m, k) => compare(e, twins[k + 1], (p) => ({ x: p.x + m.rect.x1 - first.rect.x1, y: p.y + m.rect.y1 - first.rect.y1 })));
+          continue;
         }
-        const moved = e.pts.map(move);
-        const off = moved.filter((p) => !twin.pts.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 3)).length;
-        if (off > moved.length * 0.05) add('対になる矢印が対称でない', `${edgeName(e)} と ${edgeName(twin)}`);
+        const shared = anchorOf(inFirst[0] ? e.dst : e.src);
+        if (!shared) continue;
+        const n = members.length;
+        for (let i = 0; i < Math.floor(n / 2); i++) {
+          const a = members[i];
+          const b = members[n - 1 - i];
+          const axis = row ? (mid(a.rect).x + mid(b.rect).x) / 2 : (mid(a.rect).y + mid(b.rect).y) / 2;
+          if (Math.abs((row ? shared.x : shared.y) - axis) > 2) continue;
+          const flip = row ? (p) => ({ x: 2 * axis - p.x, y: p.y }) : (p) => ({ x: p.x, y: 2 * axis - p.y });
+          // 枠の中の並びが鏡写しでない対（両端の位置が写し合わない）は比べない
+          const ends = (e) => [e.pts[0], e.pts[e.pts.length - 1]];
+          if (ends(twins[i]).map(flip).some((p, k) => Math.hypot(p.x - ends(twins[n - 1 - i])[k].x, p.y - ends(twins[n - 1 - i])[k].y) > 3)) continue;
+          compare(twins[i], twins[n - 1 - i], flip);
+        }
       }
     }
 
     for (const e of edges) {
       const s = nodes[e.src] && nodes[e.src].icon && mid(nodes[e.src].icon);
       const d = nodes[e.dst] && nodes[e.dst].icon && mid(nodes[e.dst].icon);
-      if (s && d && (flow === 'down' ? d.y < s.y - 10 : d.x < s.x - 10)) add('流れと逆向きの矢印', edgeName(e));
+      // 矢印の先が向く向きで判断する（下から回り込んで横から入る線は逆向きに見えない）
+      const tip = e.pts[e.pts.length - 1];
+      const before = [...e.corners].reverse().find((p) => Math.hypot(p.x - tip.x, p.y - tip.y) > 1) || e.pts[0];
+      const back = flow === 'down' ? tip.y < before.y - 1 && Math.abs(tip.x - before.x) < 1 : tip.x < before.x - 1 && Math.abs(tip.y - before.y) < 1;
+      if (s && d && back) add('流れと逆向きの矢印', edgeName(e));
       if (e.corners.length > 2) add('曲がりが多い', `${edgeName(e)}（${e.corners.length} 回）`);
     }
 

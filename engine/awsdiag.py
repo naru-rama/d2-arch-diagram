@@ -49,8 +49,16 @@ GROUP_STYLE = {
     "ec2-instance-contents": ("#ED7100", ""),
     "spot-fleet": ("#ED7100", ""),
     "generic": ("#7D8998", "8 4"),
+    "k8s-cluster": ("#326CE5", ""),
+    "k8s-namespace": ("#326CE5", "8 4"),
+    "k8s-node": ("#326CE5", "3 3"),
+    "k8s-pod": ("#326CE5", "3 3"),
+    "k8s-deployment": ("#326CE5", "8 4"),
 }
-STRUCTURE = {"svc", "group", "plain", "spacer"} | set(GROUP_STYLE)
+FRAME_PIN_GAP = 16
+OPPOSITE = {"top": "bottom", "bottom": "top", "left": "right", "right": "left"}
+LEGACY = "#8F96A0"
+STRUCTURE = {"svc", "group", "plain", "spacer", "legacy"} | set(GROUP_STYLE)
 
 
 def b64(s):
@@ -80,8 +88,14 @@ class Diagram:
             n.icon_file = self.resolve_icon(n)
         for e in self.d.edges:
             for end in (e.src, e.dst):
-                if end not in self.nodes:
-                    fail(f"矢印 {e.src} -> {e.dst} の {end} がノードではありません（枠や存在しない ID は矢印の端にできません）")
+                if end not in self.nodes and (end not in self.groups or "plain" in self.groups[end].classes):
+                    fail(f"矢印 {e.src} -> {e.dst} の {end} がノードでも枠でもありません（見えない枠や存在しない ID は矢印の端にできません）")
+
+    def ep_anchor(self, oid):
+        if oid in self.nodes:
+            return center(icon_box(self.nodes[oid]))
+        g = self.groups[oid]
+        return (g.x + g.ax, g.y + g.ay)
 
     def resolve_icon(self, n):
         if n.icon:
@@ -98,38 +112,60 @@ class Diagram:
         fail(f"{n.id} のアイコンが決まりません（class {names} は索引にありません。`icons` で名前を探してください）")
 
     def sides(self, e):
-        (sx, sy), (tx, ty) = center(icon_box(self.nodes[e.src])), center(icon_box(self.nodes[e.dst]))
+        (sx, sy), (tx, ty) = self.ep_anchor(e.src), self.ep_anchor(e.dst)
         dx, dy = tx - sx, ty - sy
         if self.d.direction == "down":
             a, b = ("bottom", "top") if dy > 30 else ("top", "bottom") if dy < -30 else ("right", "left") if dx > 0 else ("left", "right")
         else:
             a, b = ("right", "left") if dx > 30 else ("left", "right") if dx < -30 else ("bottom", "top") if dy > 0 else ("top", "bottom")
+        facing = self.facing(e.src, self.ep_anchor(e.dst)) or OPPOSITE.get(self.facing(e.dst, (sx, sy)))
+        if facing:
+            a, b = facing, OPPOSITE[facing]
         forced_from = next((c[5:] for c in e.classes if c.startswith("from-")), None)
         forced_to = next((c[3:] for c in e.classes if c.startswith("to-")), None)
         return forced_from or a, forced_to or b
+
+    def facing(self, oid, point):
+        """枠 oid の辺のうち、外にある point に向いている辺。"""
+        if oid not in self.groups:
+            return None
+        g, (x, y) = self.groups[oid], point
+        across = [("bottom", y > g.y + g.h), ("top", y < g.y)]
+        along = [("right", x > g.x + g.w), ("left", x < g.x)]
+        # 流れの向きの辺を先に選ぶ（下の向きなら、下にある相手へは下の辺から出る）
+        for side, hit in across + along if self.d.direction == "down" else along + across:
+            if hit:
+                return side
+        return None
 
     def pins(self):
         ends = defaultdict(list)
         for i, e in enumerate(self.d.edges):
             e.pins = [None, None]
             a, b = self.sides(e)
-            other_src, other_dst = center(icon_box(self.nodes[e.dst])), center(icon_box(self.nodes[e.src]))
+            other_src, other_dst = self.ep_anchor(e.dst), self.ep_anchor(e.src)
             ends[(e.src, a)].append((other_src[0] if a in ("top", "bottom") else other_src[1], i, 0))
             ends[(e.dst, b)].append((other_dst[0] if b in ("top", "bottom") else other_dst[1], i, 1))
         for (node_id, side), items in sorted(ends.items()):
+            items.sort()
+            if node_id in self.groups:
+                self.frame_pins(node_id, side, items)
+                continue
             node = self.nodes[node_id]
             icon, label = icon_box(node), label_box(node)
             mid = center(icon)[0 if side in ("top", "bottom") else 1]
-            items.sort()
             straight = [it for it in items if abs(it[0] - mid) < 1]
-            slots = len(items) + (1 if straight and len(items) % 2 == 0 else 0)
-            order = list(range(slots))
             if straight:
-                order.remove(slots // 2)
-                rest = [it for it in items if it is not straight[0]]
-                placed = [(slots // 2, straight[0])] + list(zip(order, rest))
+                # まっすぐな線を真ん中に置き、ほかの線は相手のいる側に置く（逆側に置くと交差する）
+                before = [it for it in items if it[0] < straight[0][0]]
+                after = [it for it in items if it is not straight[0] and it not in before]
+                half = max(len(before), len(after))
+                slots = 2 * half + 1
+                placed = [(half - len(before) + j, it) for j, it in enumerate(before)] + [(half, straight[0])]
+                placed += [(half + 1 + j, it) for j, it in enumerate(after)]
             else:
-                placed = list(zip(order, items))
+                slots = len(items)
+                placed = list(enumerate(items))
             for j, (_, i, which) in placed:
                 frac = (j + 1) / (slots + 1)
                 if side in ("top", "bottom"):
@@ -141,6 +177,35 @@ class Diagram:
                     y = icon[1] + (icon[3] - icon[1]) * frac
                     pin = {"node": node_id, "shape": "icon", "x": icon[0] if side == "left" else icon[2], "y": y, "side": side}
                 self.d.edges[i].pins[which] = pin
+
+    def frame_pins(self, group_id, side, items):
+        """枠の辺の上で相手の正面に当たる線はまっすぐつなぎ、ほかは辺の真ん中から並べる。"""
+        g = self.groups[group_id]
+        across = side in ("top", "bottom")
+        if across:
+            lo, hi = (header_box(g, self.font)[2] if side == "top" else g.x) + FRAME_PIN_GAP, g.x + g.w - FRAME_PIN_GAP
+        else:
+            lo, hi = g.y + header_band(g), g.y + g.h - FRAME_PIN_GAP
+        straight = [it for it in items if lo <= it[0] <= hi]
+        rest = [it for it in items if it not in straight]
+        mid = self.ep_anchor(group_id)[0 if across else 1]
+        spots = [(pos, i, which) for pos, i, which in straight]
+        # 真ん中から外へ順に空いている位置を探し、まっすぐな線の位置とは重ねない
+        half = 0 if len(rest) % 2 else FRAME_PIN_GAP / 2
+        free = []
+        for k in range(len(items) + 2):
+            d = half + k * FRAME_PIN_GAP
+            for pos in (mid - d, mid + d) if d else (mid,):
+                if lo <= pos <= hi and all(abs(pos - p) >= FRAME_PIN_GAP for p, _, _ in straight):
+                    free.append(pos)
+        free = sorted(free[: len(rest)])
+        spots += [(pos, i, which) for pos, (_, i, which) in zip(free, rest)]
+        for pos, i, which in spots:
+            if across:
+                x, y = pos, g.y if side == "top" else g.y + g.h
+            else:
+                x, y = g.x if side == "left" else g.x + g.w, pos
+            self.d.edges[i].pins[which] = {"node": group_id, "shape": "frame", "x": x, "y": y, "side": side}
 
     def route(self):
         if not self.d.edges:
@@ -160,49 +225,132 @@ class Diagram:
             e.pts = self.straighten(simplify(e.pts))
         self.pull_bends()
 
+    def twin_sets(self):
+        """同じ親の下で、種類と中身の構造が同じ枠の組（AZ、Node など）。並び順に並べる。"""
+        by_parent = defaultdict(list)
+        for g in self.groups.values():
+            parent = g.id.rsplit(".", 1)[0] if "." in g.id else ""
+            by_parent[(parent, group_kind(g), "plain" in g.classes)].append(g)
+        sets = []
+        for _, members in sorted(by_parent.items()):
+            buckets = defaultdict(list)
+            for g in members:
+                inner = tuple(sorted(o.id[len(g.id) + 1 :] for o in self.objs.values() if o.id.startswith(g.id + ".")))
+                if inner:
+                    buckets[inner].append(g)
+            for gs in buckets.values():
+                if len(gs) >= 2:
+                    row = len({round(g.y, 3) for g in gs}) == 1
+                    sets.append((sorted(gs, key=lambda g: g.x if row else g.y), row))
+        return sets
+
     def mirror(self):
-        azs = sorted((g for g in self.groups.values() if group_kind(g) == "az"), key=lambda g: g.x)
-        if len(azs) != 2:
-            return
-        a, b = azs
-        axis = (a.x + a.w / 2 + b.x + b.w / 2) / 2
-        mapped = lambda nid: b.id + nid[len(a.id) :] if nid.startswith(a.id + ".") else nid
         by_pair = {(e.src, e.dst): e for e in self.d.edges}
-        for e in self.d.edges:
-            inside = [n.startswith(a.id + ".") for n in (e.src, e.dst)]
-            twin = by_pair.get((mapped(e.src), mapped(e.dst)))
-            if not any(inside) or not twin or twin is e:
-                continue
-            if all(inside):
-                twin.pts = [(x + b.x - a.x, y + b.y - a.y) for x, y in e.pts]
-            else:
-                shared = self.nodes[e.dst if inside[0] else e.src]
-                if abs(shared.x + shared.ax - axis) > 1:
+        for members, row in self.twin_sets():
+            first = members[0]
+
+            def mapped(m, nid):
+                return m.id + nid[len(first.id) :] if nid.startswith(first.id + ".") else nid
+
+            for e in list(self.d.edges):
+                inside = [n.startswith(first.id + ".") for n in (e.src, e.dst)]
+                if not any(inside):
                     continue
-                twin.pts = [(2 * axis - x, y) for x, y in e.pts]
-            if twin.label == e.label:
-                twin.label = ""
+                twins = [by_pair.get((mapped(m, e.src), mapped(m, e.dst))) for m in members]
+                if any(t is None for t in twins):
+                    continue
+                if all(inside):
+                    for m, t in zip(members[1:], twins[1:]):
+                        t.pts = [(x + m.x - first.x, y + m.y - first.y) for x, y in e.pts]
+                else:
+                    shared = self.ep_anchor(e.dst if inside[0] else e.src)[0 if row else 1]
+                    n = len(members)
+                    for i in range(n // 2):
+                        a, b = members[i], members[n - 1 - i]
+                        axis = (a.x + a.w / 2 + b.x + b.w / 2) / 2 if row else (a.y + a.h / 2 + b.y + b.h / 2) / 2
+                        if abs(shared - axis) > 1:
+                            continue
+                        flip = (lambda p: (2 * axis - p[0], p[1])) if row else (lambda p: (p[0], 2 * axis - p[1]))
+                        moved = [flip(p) for p in twins[i].pts]
+                        # 枠の中の並びが鏡写しでないと、写した線の端が相手からずれる
+                        if any(abs(a - b) > 1 for p, q in ((moved[0], twins[n - 1 - i].pts[0]), (moved[-1], twins[n - 1 - i].pts[-1])) for a, b in zip(p, q)):
+                            continue
+                        twins[n - 1 - i].pts = moved
+                for t in twins[1:]:
+                    if t.label == e.label:
+                        t.label = ""
 
     def pull_bends(self):
-        """同じノードから分かれる矢印は、出てすぐに曲げる（後ろの水平・垂直の区間をラベルのために長く取る）。"""
+        """Z 字の矢印の曲がり角を決める。同じノードから分かれる矢印は出てすぐに曲げ（後ろの区間をラベルのために長く取る）、
+        出ていく枠があれば、枠を直角に抜けてから曲げる。"""
         fans = defaultdict(list)
         for e in self.d.edges:
             if len(e.pts) == 4 and seg_axis(e.pts, 0) and seg_axis(e.pts, 0) == seg_axis(e.pts, 2) != seg_axis(e.pts, 1):
                 k = 0 if seg_axis(e.pts, 0) == "h" else 1
                 turn = 1 if e.pts[2][1 - k] > e.pts[1][1 - k] else -1
                 fans[(e.src, e.pins[0]["side"], turn)].append(e)
-        for (src, side, _), group in sorted(fans.items(), key=lambda kv: kv[0]):
-            if sum(len(g) for (s, sd, _), g in fans.items() if s == src and sd == side) < 2:
-                continue
+        for (src, side, turn), group in sorted(fans.items(), key=lambda kv: kv[0]):
+            fan = sum(len(g) for (s, sd, _), g in fans.items() if s == src and sd == side) >= 2
             k = 0 if side in ("left", "right") else 1
             sign = 1 if side in ("right", "bottom") else -1
-            group.sort(key=lambda e: abs(e.pts[1][k] - e.pts[0][k]))
+            # 曲がる側の端から出る線ほど先に曲げると、線どうしが交差しない
+            group.sort(key=lambda e: -turn * e.pts[0][1 - k])
             for rank, e in enumerate(group):
-                new = e.pts[0][k] + sign * (FAN_OFFSET + rank * FAN_SPREAD)
-                if abs(new - e.pts[0][k]) >= abs(e.pts[3][k] - e.pts[0][k]) - FAN_OFFSET:
+                step = FAN_OFFSET + rank * FAN_SPREAD
+                exits = self.exit_walls(e, k, sign)
+                inside = [w for w in exits if (w - e.pts[1][k]) * sign > 0]
+                if not fan and not inside:
                     continue
-                put = (lambda p, v=new: (v, p[1])) if k == 0 else (lambda p, v=new: (p[0], v))
-                e.pts = [e.pts[0], put(e.pts[1]), put(e.pts[2]), e.pts[3]]
+                starts = sorted(exits, key=lambda w: -w * sign) + [e.pts[0][k]] if fan else sorted(inside, key=lambda w: -w * sign)
+                for base in starts:
+                    new = base + sign * step
+                    if (e.pts[3][k] - new) * sign < FAN_OFFSET:
+                        continue
+                    put = (lambda p, v=new: (v, p[1])) if k == 0 else (lambda p, v=new: (p[0], v))
+                    cand = [e.pts[0], put(e.pts[1]), put(e.pts[2]), e.pts[3]]
+                    if self.clear_path(cand, e):
+                        e.pts = cand
+                        break
+
+    def exit_walls(self, e, k, sign):
+        """矢印が出ていく枠（元を含み、先を含まない枠）の、出ていく側の辺の位置。"""
+        out = []
+        for g in self.groups.values():
+            if "plain" in g.classes or e.src == g.id or not (e.src + ".").startswith(g.id + "."):
+                continue
+            if (e.dst + ".").startswith(g.id + "."):
+                continue
+            lo, hi = (g.x, g.x + g.w) if k == 0 else (g.y, g.y + g.h)
+            out.append(hi if sign > 0 else lo)
+        return out
+
+    def clear_path(self, pts, e):
+        """ノードや見出しを貫かず、ほかの矢印と重ならない経路か。"""
+        boxes = [icon_box(n) for n in self.nodes.values()] + [b for b in (label_box(n) for n in self.nodes.values()) if b]
+        boxes += [header_box(g, self.font) for g in self.groups.values() if g.label and "plain" not in g.classes]
+        ends = {e.src, e.dst}
+        own = [b for nid in ends if nid in self.nodes for b in (icon_box(self.nodes[nid]), label_box(self.nodes[nid])) if b]
+        for i in range(len(pts) - 1):
+            (x1, y1), (x2, y2) = pts[i], pts[i + 1]
+            lx, hx, ly, hy = min(x1, x2), max(x1, x2), min(y1, y2), max(y1, y2)
+            for b in boxes:
+                if (i == 0 or i == len(pts) - 2) and b in own:
+                    continue
+                if lx < b[2] and hx > b[0] and ly < b[3] and hy > b[1]:
+                    return False
+            axis = seg_axis(pts, i)
+            for other in self.d.edges:
+                if other is e or not hasattr(other, "pts"):
+                    continue
+                for j in range(len(other.pts) - 1):
+                    if seg_axis(other.pts, j) != axis:
+                        continue
+                    (ox1, oy1), (ox2, oy2) = other.pts[j], other.pts[j + 1]
+                    if axis == "h" and abs(oy1 - y1) < 4 and min(hx, max(ox1, ox2)) - max(lx, min(ox1, ox2)) > 0:
+                        return False
+                    if axis == "v" and abs(ox1 - x1) < 4 and min(hy, max(oy1, oy2)) - max(ly, min(oy1, oy2)) > 0:
+                        return False
+        return True
 
     def walls(self):
         for g in self.groups.values():
@@ -240,7 +388,9 @@ class Diagram:
                     band = axis == "h" and wall == g.y and wall < pos < wall + header_band(g)
                     if not band and abs(pos - wall) >= HUG:
                         continue
-                    side = -1 if band else (1 if pos >= wall else -1)
+                    inward = 1 if wall == (g.y if axis == "h" else g.x) else -1
+                    leaving = (pos - wall) * inward > 0 and any((end[k] - wall) * inward < 0 for end in (pts[0], pts[-1]))
+                    side = -inward if leaving else -1 if band else (1 if pos >= wall else -1)
                     far = [o for o, olo, ohi in self.obstacles(axis) if (o - wall) * side > 1 and min(hi, ohi) - max(lo, olo) > 0]
                     if not far:
                         continue
@@ -260,6 +410,8 @@ class Diagram:
 
     def place_labels(self):
         labeled = [e for e in self.d.edges if e.label]
+        for e in self.d.edges:
+            e.label_at = None
         for e in labeled:
             e.label_w = max(self.font.width(line, EDGE_FONT) for line in e.label.split("\n")) + 2 * LABEL_PAD
             e.label_h = (EDGE_FONT + 4) * (e.label.count("\n") + 1)
@@ -322,11 +474,18 @@ class Diagram:
                     if hy1 - 4 < cross < hy2 + 4:
                         blocked.append((hx1 - half, hx2 + half))
         k = 0 if axis == "h" else 1
+        together = {id(e) for e, _ in members}
         for e, i in members:
             cross = e.pts[i][1] if axis == "h" else e.pts[i][0]
             for other in self.d.edges:
                 if other is e:
                     continue
+                spot = getattr(other, "label_at", None)
+                if spot and id(other) not in together:
+                    near = (e.label_h + other.label_h) / 2 + 2 if axis == "h" else (e.label_w + other.label_w) / 2 + 2
+                    if abs(spot[1 - k] - cross) < near:
+                        size = (other.label_w if axis == "h" else other.label_h) / 2
+                        blocked.append((spot[k] - size - half, spot[k] + size + half))
                 for j in range(len(other.pts) - 1):
                     other_axis = seg_axis(other.pts, j)
                     if other_axis is None:
@@ -337,6 +496,8 @@ class Diagram:
                             blocked.append((other.pts[j][k] - half, other.pts[j][k] + half))
                         continue
                     reach = (e.label_h if axis == "h" else e.label_w) / 2 + 2
+                    if id(other) in together:
+                        reach = (e.label_h + other.label_h) / 2 + 2 if axis == "h" else (e.label_w + other.label_w) / 2 + 2
                     if abs(other.pts[j][1 - k] - cross) < reach:
                         lo2, hi2 = sorted((other.pts[j][k], other.pts[j + 1][k]))
                         blocked.append((lo2 - half, hi2 + half))
@@ -357,7 +518,10 @@ class Diagram:
             'text{font-family:"diagram",sans-serif;fill:#000000}'
             "</style>"
             '<marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" orient="auto" markerUnits="userSpaceOnUse">'
-            '<path d="M 1 1 L 10 5 L 1 9" fill="none" stroke="#000000" stroke-width="1" /></marker></defs>',
+            '<path d="M 1 1 L 10 5 L 1 9" fill="none" stroke="#000000" stroke-width="1" /></marker>'
+            '<marker id="arrow-legacy" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" orient="auto" markerUnits="userSpaceOnUse">'
+            f'<path d="M 1 1 L 10 5 L 1 9" fill="none" stroke="{LEGACY}" stroke-width="1" /></marker>'
+            '<filter id="legacy"><feColorMatrix type="saturate" values="0" /></filter></defs>',
             f'<rect width="{self.width:g}" height="{self.height:g}" fill="#FFFFFF" />',
         ]
         for g in sorted(self.groups.values(), key=lambda g: (g.id.count("."), g.id)):
@@ -374,45 +538,59 @@ class Diagram:
     def render_group(self, g):
         kind = group_kind(g)
         color, dash = GROUP_STYLE[kind]
+        legacy = "legacy" in g.classes
+        if legacy:
+            color = LEGACY
         dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
         out = [f'<g class="{b64(g.id)} group {" ".join(g.classes)}"><g class="shape">']
         out.append(f'<rect x="{g.x:g}" y="{g.y:g}" width="{g.w:g}" height="{g.h:g}" fill="none" stroke="{color}" stroke-width="1"{dash_attr} /></g>')
         if kind not in LABEL_ONLY:
             uri = data_uri(os.path.join(ICON_DIR, catalog.GROUP_FILES[kind]))
-            out.append(f'<image href="{uri}" x="{g.x:g}" y="{g.y:g}" width="{GROUP_ICON}" height="{GROUP_ICON}" />')
+            out.append(f'<image href="{uri}" x="{g.x:g}" y="{g.y:g}" width="{GROUP_ICON}" height="{GROUP_ICON}"{gray_attr(legacy)} />')
             tx, ty = g.x + GROUP_ICON + 10, g.y + GROUP_ICON / 2 + FONT_SIZE * 0.35
         else:
             tx, ty = g.x + 10, g.y + LINE_H
         if g.label:
-            out.append(f'<text x="{tx:g}" y="{ty:g}" style="text-anchor:start;font-size:{FONT_SIZE}px">{html.escape(g.label)}</text>')
+            out.append(f'<text x="{tx:g}" y="{ty:g}" style="text-anchor:start;font-size:{FONT_SIZE}px{text_fill(legacy)}">{html.escape(g.label)}</text>')
         out.append("</g>")
         return "".join(out)
 
     def render_node(self, n):
         box = icon_box(n)
+        legacy = "legacy" in n.classes
         out = [f'<g class="{b64(n.id)} svc {" ".join(n.classes)}"><g class="shape">']
-        out.append(f'<image href="{data_uri(n.icon_file)}" x="{box[0]:g}" y="{box[1]:g}" width="{ICON}" height="{ICON}" /></g>')
+        out.append(f'<image href="{data_uri(n.icon_file)}" x="{box[0]:g}" y="{box[1]:g}" width="{ICON}" height="{ICON}"{gray_attr(legacy)} /></g>')
         if n.label:
             cx = n.x + n.ax
             for k, line in enumerate(n.label.split("\n")):
                 y = n.y + ICON + LABEL_GAP + FONT_SIZE + k * LINE_H
-                out.append(f'<text x="{cx:g}" y="{y:g}" style="text-anchor:middle;font-size:{FONT_SIZE}px">{html.escape(line)}</text>')
+                out.append(f'<text x="{cx:g}" y="{y:g}" style="text-anchor:middle;font-size:{FONT_SIZE}px{text_fill(legacy)}">{html.escape(line)}</text>')
         out.append("</g>")
         return "".join(out)
 
     def render_edge(self, e):
-        dash = ' stroke-dasharray="5 4"' if "async" in e.classes else ""
+        dash = ' stroke-dasharray="5 4"' if {"async", "dashed"} & set(e.classes) else ""
+        legacy = "legacy" in e.classes
+        stroke, marker = (LEGACY, "arrow-legacy") if legacy else ("#000000", "arrow")
         ident = b64(f"({e.src} -> {e.dst})[0]")
         out = [f'<g class="{ident} {" ".join(e.classes)}">']
-        out.append(f'<path d="{path_d(e.pts)}" fill="none" stroke="#000000" stroke-width="1"{dash} class="connection" marker-end="url(#arrow)" />')
+        out.append(f'<path d="{path_d(e.pts)}" fill="none" stroke="{stroke}" stroke-width="1"{dash} class="connection" marker-end="url(#{marker})" />')
         if e.label:
             x, y = e.label_at
             out.append(f'<rect x="{x - e.label_w / 2:g}" y="{y - e.label_h / 2:g}" width="{e.label_w:g}" height="{e.label_h:g}" fill="#FFFFFF" />')
             for k, line in enumerate(e.label.split("\n")):
                 ty = y - e.label_h / 2 + (EDGE_FONT + 4) * k + EDGE_FONT
-                out.append(f'<text x="{x:g}" y="{ty:g}" style="text-anchor:middle;font-size:{EDGE_FONT}px">{html.escape(line)}</text>')
+                out.append(f'<text x="{x:g}" y="{ty:g}" style="text-anchor:middle;font-size:{EDGE_FONT}px{text_fill(legacy)}">{html.escape(line)}</text>')
         out.append("</g>")
         return "".join(out)
+
+
+def gray_attr(legacy):
+    return ' filter="url(#legacy)" opacity="0.55"' if legacy else ""
+
+
+def text_fill(legacy):
+    return f";fill:{LEGACY}" if legacy else ""
 
 
 def data_uri(path):

@@ -1,0 +1,66 @@
+direction: down
+
+users: 利用者 {class: users}
+
+aws: AWS Cloud {
+  class: aws-cloud
+
+  region: ap-northeast-1 {
+    class: region
+    grid-columns: 3
+
+    ecr: ECR {class: ecr}
+
+    vpc: VPC {
+      class: vpc
+      alb: ALB {class: alb}
+
+      eks: EKS クラスター {
+        class: k8s-cluster
+        svc: Service {class: k8s-service}
+
+        azs: "" {
+          class: plain
+          grid-columns: 3
+
+          az_a: ap-northeast-1a {
+            class: az
+            node: ノード {
+              class: k8s-node
+              pod: Pod {class: k8s-pod}
+            }
+          }
+          az_c: ap-northeast-1c {
+            class: az
+            node: ノード {
+              class: k8s-node
+              pod: Pod {class: k8s-pod}
+            }
+          }
+          az_d: ap-northeast-1d {
+            class: az
+            node: ノード {
+              class: k8s-node
+              pod: Pod {class: k8s-pod}
+            }
+          }
+        }
+      }
+
+      aurora: Aurora {class: aurora}
+    }
+
+    logs: CloudWatch Logs {class: cloudwatch-logs}
+  }
+}
+
+users -> aws.region.vpc.alb: HTTPS
+aws.region.vpc.alb -> aws.region.vpc.eks.svc
+aws.region.vpc.eks.svc -> aws.region.vpc.eks.azs.az_a.node.pod
+aws.region.vpc.eks.svc -> aws.region.vpc.eks.azs.az_c.node.pod
+aws.region.vpc.eks.svc -> aws.region.vpc.eks.azs.az_d.node.pod
+aws.region.vpc.eks.azs.az_a.node.pod -> aws.region.vpc.aurora: SQL
+aws.region.vpc.eks.azs.az_c.node.pod -> aws.region.vpc.aurora: SQL
+aws.region.vpc.eks.azs.az_d.node.pod -> aws.region.vpc.aurora: SQL
+aws.region.ecr -> aws.region.vpc.eks: イメージの取得 {class: [from-right; to-left]}
+aws.region.vpc.eks -> aws.region.logs: ログ {class: [async; from-right; to-left]}

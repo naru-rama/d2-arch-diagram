@@ -9,7 +9,7 @@ AWS（Amazon Web Services）とも、D2 の開発元の Terrastruct とも関係
 Docker。初回の実行時に `docker/Dockerfile` からイメージを作る（数十秒）。そのとき、次の場所からダウンロードする。
 
 - AWS の公式アイコン配布物（`d1.awsstatic.com`）
-- フォント BIZ UDPGothic（`raw.githubusercontent.com`）
+- フォント BIZ UDPGothic と Kubernetes の公式アイコン（`raw.githubusercontent.com`）
 - npm のパッケージ（libavoid-js、puppeteer-core）と Alpine のパッケージ（Chromium など）
 
 ## Claude Code のスキルとして使う
@@ -33,5 +33,6 @@ tests/run.sh                                 # 見本の図が変わっていな
 このリポジトリのコードは MIT ライセンス。実行時に取ってくるものは、それぞれの条件に従う。
 
 - AWS の公式アイコン: [AWS Architecture Icons](https://aws.amazon.com/architecture/icons/) の条件。このリポジトリには含めていない。
+- Kubernetes の公式アイコン（kubernetes/community）: Apache-2.0 または CC-BY-4.0。Kubernetes のロゴは使っていない。
 - BIZ UDPGothic: SIL Open Font License 1.1。出力する SVG には、使った文字だけを埋め込む。
 - libavoid-js: LGPL-2.1。npm から取ってきて、そのまま使う。

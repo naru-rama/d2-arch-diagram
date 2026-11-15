@@ -1,0 +1,67 @@
+direction: right
+
+users: 利用者 {class: users}
+
+aws: AWS Cloud {
+  class: aws-cloud
+
+  region: ap-northeast-1 {
+    class: region
+    grid-columns: 2
+
+    vpc: VPC {
+      class: vpc
+      grid-columns: 3
+
+      alb: ALB {class: alb}
+
+      eks: EKS クラスター {
+        class: k8s-cluster
+        grid-columns: 1
+
+        batch: batch {
+          class: k8s-namespace
+          worker: "Deployment\nworker" {class: k8s-deployment}
+        }
+        shop: shop {
+          class: k8s-namespace
+          web_svc: "Service\nweb" {class: k8s-service}
+          web: "Deployment\nweb" {class: k8s-deployment}
+          api_svc: "Service\napi" {class: k8s-service}
+          api: "Deployment\napi" {class: k8s-deployment}
+        }
+        logging: amazon-cloudwatch {
+          class: k8s-namespace
+          fluentbit: "DaemonSet\nFluent Bit" {class: k8s-daemonset}
+        }
+      }
+
+      data: "" {
+        class: plain
+        grid-columns: 1
+        aurora: Aurora {class: aurora}
+        cache: ElastiCache {class: elasticache}
+      }
+    }
+
+    managed: "" {
+      class: plain
+      grid-columns: 1
+      s3: S3 {class: s3}
+      sqs: SQS {class: sqs}
+      logs: CloudWatch Logs {class: cloudwatch-logs}
+    }
+  }
+}
+
+users -> aws.region.vpc.alb: HTTPS
+aws.region.vpc.alb -> aws.region.vpc.eks.shop.web_svc
+aws.region.vpc.eks.shop.web_svc -> aws.region.vpc.eks.shop.web
+aws.region.vpc.eks.shop.web -> aws.region.vpc.eks.shop.api_svc
+aws.region.vpc.eks.shop.api_svc -> aws.region.vpc.eks.shop.api
+aws.region.vpc.eks.shop.api -> aws.region.vpc.data.aurora: SQL
+aws.region.vpc.eks.shop.api -> aws.region.vpc.data.cache: キャッシュ
+aws.region.vpc.eks.shop.api -> aws.region.managed.sqs: ジョブ登録 {class: async}
+aws.region.vpc.eks.batch.worker -> aws.region.managed.sqs: 受信
+aws.region.vpc.eks.batch.worker -> aws.region.managed.s3: 保存
+aws.region.vpc.eks.logging.fluentbit -> aws.region.managed.logs: ログ {class: async}
