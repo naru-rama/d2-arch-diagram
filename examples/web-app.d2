@@ -1,0 +1,92 @@
+direction: down
+
+users: 利用者 {class: users}
+
+aws: AWS Cloud {
+  class: aws-cloud
+
+  edge: "" {
+    class: plain
+    grid-columns: 3
+    route53: Route 53 {class: route-53}
+    waf: WAF {class: waf}
+    e1: {class: spacer}
+    e2: {class: spacer}
+    cloudfront: CloudFront {class: cloudfront}
+    e3: {class: spacer}
+  }
+
+  region: ap-northeast-1 {
+    class: region
+
+    storage: "" {
+      class: plain
+      grid-columns: 3
+      s1: {class: spacer}
+      s2: {class: spacer}
+      s3: S3 {class: s3}
+    }
+
+    vpc: VPC {
+      class: vpc
+      alb: ALB {class: alb}
+
+      azs: "" {
+        class: plain
+        grid-columns: 2
+
+        az_a: ap-northeast-1a {
+          class: az
+          private: プライベートサブネット {
+            class: private-subnet
+            app: Fargate {class: fargate}
+          }
+          db: DB サブネット {
+            class: private-subnet
+            aurora: Aurora プライマリ {class: aurora-instance}
+          }
+        }
+
+        az_c: ap-northeast-1c {
+          class: az
+          private: プライベートサブネット {
+            class: private-subnet
+            app: Fargate {class: fargate}
+          }
+          db: DB サブネット {
+            class: private-subnet
+            aurora: Aurora レプリカ {class: aurora-instance}
+          }
+        }
+      }
+    }
+
+    jobs: "" {
+      class: plain
+      grid-columns: 5
+      j1: {class: spacer}
+      j2: {class: spacer}
+      sqs: SQS {class: sqs}
+      lambda: Lambda {class: lambda}
+      dynamodb: DynamoDB {class: dynamodb}
+    }
+  }
+}
+
+users -> aws.edge.route53: 名前解決 {class: from-left}
+users -> aws.edge.waf: HTTPS
+aws.edge.waf -> aws.edge.cloudfront
+aws.edge.cloudfront -> aws.region.storage.s3: 静的ファイル {class: from-right}
+aws.edge.cloudfront -> aws.region.vpc.alb: API
+
+aws.region.vpc.alb -> aws.region.vpc.azs.az_a.private.app
+aws.region.vpc.alb -> aws.region.vpc.azs.az_c.private.app
+
+aws.region.vpc.azs.az_a.private.app -> aws.region.vpc.azs.az_a.db.aurora: SQL
+aws.region.vpc.azs.az_c.private.app -> aws.region.vpc.azs.az_a.db.aurora: {class: to-right}
+aws.region.vpc.azs.az_a.db.aurora -> aws.region.vpc.azs.az_c.db.aurora: 複製 {class: async}
+
+aws.region.vpc.azs.az_a.private.app -> aws.region.jobs.sqs: ジョブ登録 {class: [async; from-right]}
+aws.region.vpc.azs.az_c.private.app -> aws.region.jobs.sqs: ジョブ登録 {class: [async; from-left]}
+aws.region.jobs.sqs -> aws.region.jobs.lambda: 起動
+aws.region.jobs.lambda -> aws.region.jobs.dynamodb: 結果の保存

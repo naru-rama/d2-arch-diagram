@@ -1,0 +1,24 @@
+direction: right
+
+users: 利用者 {class: users}
+
+aws: AWS Cloud {
+  class: aws-cloud
+
+  region: ap-northeast-1 {
+    class: region
+    apigw: API Gateway {class: api-gateway}
+    fn: Lambda {class: lambda}
+    store: "" {
+      class: plain
+      grid-rows: 2
+      ddb: DynamoDB {class: dynamodb}
+      s3: S3 {class: s3}
+    }
+  }
+}
+
+users -> aws.region.apigw: HTTPS
+aws.region.apigw -> aws.region.fn: 呼び出し
+aws.region.fn -> aws.region.store.ddb: 注文の保存
+aws.region.fn -> aws.region.store.s3: 添付ファイル

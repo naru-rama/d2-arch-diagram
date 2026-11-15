@@ -1,0 +1,43 @@
+#!/bin/bash
+set -euo pipefail
+
+usage() {
+  echo "usage: aws-diagram render <図.d2>   同じフォルダに SVG と確認用の PNG を書き出す" >&2
+  echo "       aws-diagram icons [検索語]    使えるアイコン名を表示する" >&2
+  exit 1
+}
+
+skill=$(cd "$(dirname "$0")/.." && pwd)
+tag=$(shasum -a 256 "$skill/docker/Dockerfile" | cut -c1-12)
+image="aws-diagram:$tag"
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  echo "Docker イメージを作っています（初回だけ）..." >&2
+  docker build -q -t "$image" "$skill/docker" >/dev/null
+fi
+
+stage=$(mktemp -d "${TMPDIR:-/tmp}/aws-diagram.XXXXXX")
+trap 'rm -rf "$stage"' EXIT
+mkdir -p "$stage/engine" "$stage/input"
+cp "$skill"/engine/* "$stage/engine/"
+
+# Docker の VM は作業フォルダ以外をマウントできないので、tar で受け渡す
+run() {
+  tar -C "$stage" -cf - . | docker run --rm -i "$image" sh -c "mkdir -p /tmp/w/out && cd /tmp/w && tar xf - && $1 >&2 && tar -C out -cf - ."
+}
+
+case "${1:-}" in
+  render)
+    [ $# -eq 2 ] || usage
+    src=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
+    dir=$(dirname "$src")
+    cp "$src" "$stage/input/"
+    if [ -d "$dir/icons" ]; then cp -r "$dir/icons" "$stage/input/"; fi
+    run "python3 engine/awsdiag.py render 'input/$(basename "$src")' out" | tar -C "$dir" -xf -
+    ;;
+  icons)
+    run "python3 engine/awsdiag.py icons '${2:-}'" >/dev/null
+    ;;
+  *)
+    usage
+    ;;
+esac
