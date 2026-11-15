@@ -25,6 +25,11 @@ EDGE_LABEL_CLEAR = 8
 ARROW = 12
 BRANCH_ROOM = 48
 CLEAR = 24
+# 上から入る線が枠の見出しをよけるのに要る、アイコンの中心から見出しの右端までの距離
+# （見出しの余白 6、配線の余白 14、接続位置の広がり 12）
+HEADER_CLEAR = 32
+PIN_SPREAD = 12
+BORDER = {"on-top", "on-bottom", "on-left", "on-right"}
 NEAR = 16
 
 GROUP_KINDS = {
@@ -76,7 +81,8 @@ class Layout:
         self.grid(obj)
 
     def grid(self, obj):
-        kids = obj.children
+        kids = [k for k in obj.children if not BORDER & set(k.classes)]
+        border = [k for k in obj.children if BORDER & set(k.classes)]
         n = len(kids)
         cols_attr = obj.attrs.get("grid-columns")
         rows_attr = obj.attrs.get("grid-rows")
@@ -95,11 +101,17 @@ class Layout:
             rows, cols = n, 1
             cells = [(k, i, 0) for i, k in enumerate(kids)]
         rows, cols = max(rows, 1), max(cols, 1)
+        if getattr(obj, "mirrored", False):
+            cells = [(k, r, cols - 1 - c) for k, r, c in cells]
         h_gap = float(obj.attrs.get("horizontal-gap", H_GAP))
         v_gap = float(obj.attrs.get("vertical-gap", V_GAP))
+        self.mirror_twins(obj, cells)
         self.share_tracks(cells)
-        self.align_stacks(cells)
+        self.align_stacks(cells, border, rows, cols)
+        # 寄せたことで中の列幅が変わった枠があるので、もう一度そろえる
+        self.share_tracks(cells)
         self.clear_headers(cells)
+        self.match_twins(cells)
 
         left = [0.0] * cols
         right = [0.0] * cols
@@ -125,6 +137,11 @@ class Layout:
             top = [max(a, b) for a, b in zip(top, floor["y"][0])]
             bottom = [max(a, b) for a, b in zip(bottom, floor["y"][1])]
             v_gap = max(v_gap, floor["y"][2])
+        # 列（行）が奇数なら、真ん中の列を挟んで対になる列の幅をそろえ、真ん中の列が枠の中央に来るようにする
+        if self.d.direction == "down" and cols % 2 and cols > 1:
+            symmetric(left, right)
+        if self.d.direction == "right" and rows % 2 and rows > 1:
+            symmetric(top, bottom)
         self.stretch_frames(cells, rows, cols)
 
         widest = max([h_gap] + [self.label_room(cells, c) for c in range(cols - 1)])
@@ -142,30 +159,109 @@ class Layout:
         content_h = y - v_gap if rows else 0
 
         if obj.kind == "plain" or obj.id == "":
-            pad, head, header_w = 0.0, 0.0, 0.0
+            pl = pr = pt = pb = header_w = 0.0
         else:
-            pad = PAD
+            pl = pr = pb = PAD
             label_w = self.text_width(obj.label) if obj.label else 0
             if group_kind(obj) in LABEL_ONLY:
-                head, header_end = LINE_H + HEADER_GAP, 10 + label_w
+                pt, header_end = LINE_H + HEADER_GAP, 10 + label_w
             else:
-                head, header_end = GROUP_ICON + HEADER_GAP, GROUP_ICON + 10 + label_w
+                pt, header_end = GROUP_ICON + HEADER_GAP, GROUP_ICON + 10 + label_w
             header_w = header_end + PAD
             if cols == 1 and self.d.direction == "down":
-                header_w = max(header_w, 2 * (header_end + CLEAR) + ICON)
-        obj.w = max(content_w + 2 * pad, header_w)
-        offset_x = (obj.w - content_w) / 2
-        obj.h = head + content_h + pad if head else content_h + 2 * pad
-        offset_y = head if head else pad
+                header_w = max(header_w, 2 * (header_end + HEADER_CLEAR))
+            # 枠線の上に置くノードの、枠の内側にはみ出す分を空ける
+            for k in border:
+                if "on-top" in k.classes:
+                    pt = max(pt, k.h - k.ay + HEADER_GAP / 2)
+                elif "on-bottom" in k.classes:
+                    pb = max(pb, k.ay + CLEAR / 2)
+                elif "on-left" in k.classes:
+                    pl = max(pl, k.w / 2 + CLEAR / 2)
+                else:
+                    pr = max(pr, k.w / 2 + CLEAR / 2)
+        obj.w = max(content_w + pl + pr, header_w)
+        offset_x = pl + (obj.w - content_w - pl - pr) / 2
+        obj.h = pt + content_h + pb
+        offset_y = pt
         mc, mr = cols // 2, rows // 2
         obj.ax = offset_x + (col_x[mc] + left[mc] if cols % 2 else content_w / 2)
         obj.ay = offset_y + (row_y[mr] + top[mr] if rows % 2 else content_h / 2)
         for k, r, c in cells:
             k.rel_x = offset_x + col_x[c] + left[c] - k.ax
             k.rel_y = offset_y + row_y[r] + top[r] - k.ay
+        floor = getattr(obj, "extent_floor", None)
+        if floor:
+            grow = max(0.0, floor[0] - obj.ax)
+            for k, _, _ in cells:
+                k.rel_x += grow
+            obj.ax += grow
+            obj.w = max(obj.w + grow, obj.ax + floor[1])
+        for side in ("on-top", "on-bottom", "on-left", "on-right"):
+            group = [k for k in border if side in k.classes]
+            for j, k in enumerate(group):
+                spread = (j - (len(group) - 1) / 2) * (max(g.w for g in group) + H_GAP)
+                if side in ("on-top", "on-bottom"):
+                    k.rel_x = obj.ax + spread - k.ax
+                    k.rel_y = (0 if side == "on-top" else obj.h) - k.ay
+                else:
+                    k.rel_x = (0 if side == "on-left" else obj.w) - k.ax
+                    k.rel_y = obj.ay + spread - k.ay
         if obj.kind == "plain" and kids and all(k.kind in ("node", "spacer") for k in kids):
             obj.loose = cells
             obj.gaps = {"y": v_gap, "x": widest}
+
+    def twins(self, cells):
+        """同じ行に並んだ、種類と中身の構造が同じ枠（対の枠）の組。左から順に並べる。"""
+        sets = defaultdict(list)
+        for k, r, c in cells:
+            if k.kind in ("group", "plain") and k.children:
+                inner = tuple(sorted(d.id[len(k.id) + 1 :] for d in walk(k) if d is not k))
+                sets[(r, k.kind, group_kind(k), inner)].append((c, k))
+        out = []
+        for key in sorted(sets, key=lambda key: key[:3] + (len(key[3]),) + key[3]):
+            if len(sets[key]) >= 2:
+                out.append([k for _, k in sorted(sets[key], key=lambda m: m[0])])
+        return out
+
+    def mirror_twins(self, obj, cells):
+        """対の枠のうち、右半分の枠の中身を鏡写しに並べ直す。"""
+        if getattr(obj, "twins_done", False):
+            return
+        obj.twins_done = True
+        for members in self.twins(cells):
+            for k in members[(len(members) + 1) // 2 :]:
+                for d in walk(k):
+                    if d.kind in ("group", "plain"):
+                        d.mirrored = not getattr(d, "mirrored", False)
+                self.relayout(k)
+
+    def match_twins(self, cells):
+        """対の枠と、その中で対応する枠の幅を、鏡写しを考えに入れてそろえる（見出しをよけて片側だけ広げた枠があっても、対が写し合うように）。"""
+        for members in self.twins(cells):
+            flips = [getattr(k, "mirrored", False) != getattr(members[0], "mirrored", False) for k in members]
+            rels = sorted({d.id[len(members[0].id) :] for d in walk(members[0]) if d.kind == "group"}, key=lambda r: (-r.count("."), r))
+            for _ in range(3):
+                changed = False
+                for rel in rels:
+                    group = [self.d.objects[m.id + rel] for m in members]
+                    sides = [(g.w - g.ax, g.ax) if f else (g.ax, g.w - g.ax) for g, f in zip(group, flips)]
+                    before, after = max(b for b, _ in sides), max(a for _, a in sides)
+                    for g, f in zip(group, flips):
+                        want = (after, before) if f else (before, after)
+                        if abs(want[0] - g.ax) > 0.01 or abs(want[1] - (g.w - g.ax)) > 0.01:
+                            changed = True
+                        g.extent_floor = want
+                if not changed:
+                    break
+                for m in members:
+                    self.relayout(m)
+
+    def relayout(self, obj):
+        for child in obj.children:
+            if child.kind in ("group", "plain"):
+                self.relayout(child)
+        self.grid(obj)
 
     def share_tracks(self, cells):
         """同じ列に縦に並べた枠どうしで列の数が同じなら列幅と間隔を、同じ行に横に並べた枠どうしで行の数が同じなら行の高さと間隔を共有する。"""
@@ -185,7 +281,7 @@ class Layout:
                     k.floor = {**getattr(k, "floor", {}), axis: (before, after, gap)}
                     self.grid(k)
 
-    def align_stacks(self, cells):
+    def align_stacks(self, cells, border=(), rows=1, cols=1):
         """見えない枠のマス目（ノードと詰め物だけ。枠の中に入れ子になったものも含む）の列と行を、
         同じ列（行）の隣のマスにいる矢印の相手の位置に寄せる。
 
@@ -197,7 +293,13 @@ class Layout:
             for loose in [d for d in walk(cell) if getattr(d, "loose", None)]:
                 for axis in ("x", "y"):
                     line = [k for k, r2, c2 in cells if k is not cell and (c2 == c if axis == "x" else r2 == r)]
-                    where = {d.id: (offset_in(k, d, axis), d) for k in line for d in walk(k) if d.kind in ("node", "group")}
+                    # 枠の中の並びは、自分で寄ってくる脇の並び（このマス目の見えない枠）には合わせない（枠が伸びるのを避ける）
+                    movable = [k for k in line if loose is not cell and getattr(k, "loose", None)]
+                    where = {d.id: (offset_in(k, d, axis), d) for k in line if k not in movable for d in walk(k) if d.kind in ("node", "group")}
+                    # 枠線の上のノードは、1 列（1 行）の枠なら、その線の上にいる
+                    sides = ("on-top", "on-bottom") if axis == "x" else ("on-left", "on-right")
+                    if (cols if axis == "x" else rows) == 1:
+                        where.update({k.id: (0.0, k) for k in border if set(sides) & set(k.classes)})
                     if where and self.align_loose(cell, loose, axis, where):
                         parent = loose.parent
                         while parent is not cell.parent:
@@ -281,7 +383,7 @@ class Layout:
         return placed
 
     def clear_headers(self, cells):
-        """下の向きの図で、上から入る線が枠の見出しを貫くなら、枠を見出しの側（左）に広げて線から見出しを外す。"""
+        """下の向きの図で、上から入る線が枠の見出しを貫くなら、枠を左右に同じだけ広げて線から見出しを外す。"""
         if self.d.direction != "down":
             return
         for frame, r, c in cells:
@@ -291,30 +393,37 @@ class Layout:
             above = {d.id for k, r2 in column if r2 < r for d in walk(k)}
             below = {d.id: k for k, r2 in column if r2 >= r for d in walk(k) if d.kind == "node"}
             inside = {d.id for d in walk(frame)}
-            end = header_end(frame, self.font) + CLEAR
+            end = header_end(frame, self.font) + HEADER_CLEAR - PIN_SPREAD
             need = 0.0
             frames_below = {d.id: k for k, r2 in column if r2 >= r for d in walk(k) if d.kind == "group"}
             cell_of = {d.id: k for k, _ in column for d in walk(k)}
+            # 上から入る線が 1 本だけのノードは、接続位置がアイコンの真ん中に決まる
+            tops = defaultdict(int)
+            for e in self.d.edges:
+                if not any(cl in e.classes for cl in ("to-left", "to-right", "to-bottom")):
+                    tops[e.dst] += 1
             for e in self.d.edges:
                 if any(cl in e.classes for cl in ("to-left", "to-right", "to-bottom")) or e.src in inside:
                     continue
+                spread = PIN_SPREAD if tops[e.dst] > 1 else 0
                 if e.src in cell_of and e.src not in above:
                     continue
                 if e.dst in below:
-                    x = offset_in(below[e.dst], self.d.objects[e.dst], "x") - ICON / 2
+                    x = offset_in(below[e.dst], self.d.objects[e.dst], "x") - spread
                 elif e.dst in frames_below and e.src in above:
                     # 枠につなぐ線は、上の相手からまっすぐ下りてくる
-                    x = offset_in(cell_of[e.src], self.d.objects[e.src], "x") - ICON / 2
+                    x = offset_in(cell_of[e.src], self.d.objects[e.src], "x") - spread
                 else:
                     continue
                 left = -frame.ax
-                if x + ICON > left and x < left + end:
+                if x + 2 * spread > left and x < left + end:
                     need = max(need, left + end - x)
             if need > 0:
+                # 片側だけ広げると中身がずれて見えるので、左右に同じだけ広げて中身を真ん中に保つ
                 for child in frame.children:
                     child.rel_x += need
                 frame.ax += need
-                frame.w += need
+                frame.w += 2 * need
 
     def stretch_frames(self, cells, rows, cols):
         frames = [(k, r, c) for k, r, c in cells if k.kind == "group"]
@@ -396,6 +505,19 @@ def header_band(obj):
     if group_kind(obj) in LABEL_ONLY:
         return LINE_H + HEADER_GAP
     return GROUP_ICON + HEADER_GAP
+
+
+def symmetric(before, after):
+    """真ん中を挟んで対になる列（行）の大きさを、鏡写しになるようにそろえる。"""
+    n = len(before)
+    m = n // 2
+    before[m] = after[m] = max(before[m], after[m])
+    for i in range(m):
+        j = n - 1 - i
+        inner = max(after[i], before[j])
+        outer = max(before[i], after[j])
+        after[i] = before[j] = inner
+        before[i] = after[j] = outer
 
 
 def walk(obj):

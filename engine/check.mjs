@@ -57,7 +57,7 @@ const result = await page.evaluate((flow) => {
         containers[id] = c;
       } else if (rest.includes('svc')) {
         const icon = g.querySelector('image');
-        const n = { id, icon: icon ? box(icon) : null };
+        const n = { id, icon: icon ? box(icon) : null, onBorder: rest.some((c) => c.startsWith('on-')) };
         if (text) {
           n.label = box(text);
           texts.push({ owner: id, kind: 'node', name: text.textContent, b: n.label });
@@ -99,9 +99,12 @@ const result = await page.evaluate((flow) => {
           i += size;
         }
         const e = { id, src: prefix + m[2], dst: prefix + m[3], pts, corners };
-        if (text) {
-          e.label = box(text);
-          texts.push({ owner: id, kind: 'edge', name: text.textContent, b: e.label });
+        const badge = g.querySelector(':scope > g.step-badge');
+        if (text || badge) {
+          const parts = [text, badge].filter(Boolean).map(box);
+          e.label = { x1: Math.min(...parts.map((b) => b.x1)), y1: Math.min(...parts.map((b) => b.y1)), x2: Math.max(...parts.map((b) => b.x2)), y2: Math.max(...parts.map((b) => b.y2)) };
+          const name = (badge ? `(${badge.textContent})` : '') + (text ? text.textContent : '');
+          texts.push({ owner: id, kind: 'edge', name, b: e.label });
         }
         edges.push(e);
       }
@@ -233,6 +236,7 @@ const result = await page.evaluate((flow) => {
     for (const t of texts) {
       if (t.kind === 'group') continue;
       for (const c of Object.values(containers)) {
+        if (t.kind === 'node' && nodes[t.owner].onBorder && t.owner.startsWith(c.id + '.')) continue;
         if (crossesBorder(inflate(t.b, MARGIN), c.rect)) add('文字が枠線にかかる', `「${t.name}」× 枠 ${short(c.id)}`);
       }
     }
@@ -301,15 +305,16 @@ const result = await page.evaluate((flow) => {
           if (!t || !t.icon) continue;
           const pa = mid(n.icon);
           const pb = mid(t.icon);
-          if (Math.abs(pa.x - first.rect.x1 - (pb.x - m.rect.x1)) > 2 || Math.abs(pa.y - first.rect.y1 - (pb.y - m.rect.y1)) > 2) {
+          const shifted = Math.abs(pa.x - first.rect.x1 - (pb.x - m.rect.x1)) <= 2;
+          const flipped = Math.abs(pa.x - first.rect.x1 - (m.rect.x2 - pb.x)) <= 2;
+          if ((!shifted && !flipped) || Math.abs(pa.y - first.rect.y1 - (pb.y - m.rect.y1)) > 2) {
             add('対になる位置がそろっていない', `${short(n.id)}（${short(m.id)}）`);
           }
         }
       }
-      const compare = (a, b, move) => {
-        const moved = a.pts.map(move);
-        const off = moved.filter((p) => !b.pts.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 3)).length;
-        if (off > moved.length * 0.05) add('対になる矢印が対称でない', `${edgeName(a)} と ${edgeName(b)}`);
+      const compare = (a, b, ...moves) => {
+        const off = (move) => a.pts.map(move).filter((p) => !b.pts.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 3)).length;
+        if (Math.min(...moves.map(off)) > a.pts.length * 0.05) add('対になる矢印が対称でない', `${edgeName(a)} と ${edgeName(b)}`);
       };
       for (const e of edges) {
         const inFirst = [e.src, e.dst].map((id) => id.startsWith(first.id + '.'));
@@ -317,7 +322,12 @@ const result = await page.evaluate((flow) => {
         const twins = members.map((m) => edges.find((o) => o.src === mapTo(m, e.src) && o.dst === mapTo(m, e.dst)));
         if (twins.some((t) => !t)) continue;
         if (inFirst.every(Boolean)) {
-          members.slice(1).forEach((m, k) => compare(e, twins[k + 1], (p) => ({ x: p.x + m.rect.x1 - first.rect.x1, y: p.y + m.rect.y1 - first.rect.y1 })));
+          members.slice(1).forEach((m, k) => compare(
+            e,
+            twins[k + 1],
+            (p) => ({ x: p.x + m.rect.x1 - first.rect.x1, y: p.y + m.rect.y1 - first.rect.y1 }),
+            (p) => ({ x: m.rect.x2 - (p.x - first.rect.x1), y: p.y + m.rect.y1 - first.rect.y1 }),
+          ));
           continue;
         }
         const shared = anchorOf(inFirst[0] ? e.dst : e.src);

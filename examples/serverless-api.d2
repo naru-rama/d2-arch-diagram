@@ -18,7 +18,7 @@ aws: AWS Cloud {
   }
 }
 
-users -> aws.region.apigw: HTTPS
-aws.region.apigw -> aws.region.fn: 呼び出し
-aws.region.fn -> aws.region.store.ddb: 注文の保存
-aws.region.fn -> aws.region.store.s3: 添付ファイル
+users -> aws.region.apigw: HTTPS {class: step-1}
+aws.region.apigw -> aws.region.fn: 呼び出し {class: step-2}
+aws.region.fn -> aws.region.store.ddb: 注文の保存 {class: step-3}
+aws.region.fn -> aws.region.store.s3: 添付ファイル {class: step-4}

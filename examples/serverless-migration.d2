@@ -55,7 +55,7 @@ main: "" {
 
       vpc: VPC {
         class: vpc
-        igw: Internet Gateway {class: internet-gateway}
+        igw: Internet Gateway {class: [internet-gateway; on-top]}
 
         public: パブリックサブネット {
           class: public-subnet
@@ -78,7 +78,7 @@ main: "" {
           grid-columns: 3
 
           lambda: Lambda {
-            class: generic
+            class: [generic; highlight]
             api: "Lambda\nAPI 処理" {class: lambda}
             worker: "Lambda\n非同期ワーカー" {class: lambda}
             batch: "Lambda\nバッチ処理" {class: lambda}
@@ -146,7 +146,7 @@ main.aws.band.vpc.public.ops.bastion -> main.aws.band.vpc.private.db.rds
 main.aws.band.vpc -> main.aws.band.east.logs {class: dashed}
 
 main.aws.front.cloudfront -> main.aws.band.vpc.igw {class: [dashed; legacy]}
-main.aws.band.vpc.igw -> main.aws.band.vpc.public.alb {class: [legacy; from-right; to-top]}
+main.aws.band.vpc.igw -> main.aws.band.vpc.public.alb {class: legacy}
 main.aws.band.vpc.public.alb -> main.aws.band.vpc.private.ecs.api {class: legacy}
 main.aws.band.vpc.private.ecs -> main.aws.band.vpc.private.db.rds {class: [dashed; legacy]}
 main.aws.band.vpc.private.ecs -> main.aws.band.east.ses {class: [dashed; legacy]}

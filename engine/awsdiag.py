@@ -21,7 +21,7 @@ sys.path.insert(0, HERE)
 
 import catalog
 from d2parse import parse
-from layout import FONT_SIZE, GROUP_ICON, ICON, LABEL_GAP, LABEL_ONLY, LINE_H, Layout, group_kind, header_band, header_box, icon_box, label_box
+from layout import BORDER, FONT_SIZE, GROUP_ICON, ICON, LABEL_GAP, LABEL_ONLY, LINE_H, Layout, group_kind, header_band, header_box, icon_box, label_box
 from ttf_width import Font
 
 FONT_FILE = os.path.join(ROOT, "fonts", "BIZUDPGothic-Regular.ttf")
@@ -56,9 +56,13 @@ GROUP_STYLE = {
     "k8s-deployment": ("#326CE5", "8 4"),
 }
 FRAME_PIN_GAP = 16
+BADGE = 16
+BADGE_GAP = 4
+MARKER = "#FFE066"
+MARKER_FILL = "#FFF3BF"
 OPPOSITE = {"top": "bottom", "bottom": "top", "left": "right", "right": "left"}
 LEGACY = "#8F96A0"
-STRUCTURE = {"svc", "group", "plain", "spacer", "legacy"} | set(GROUP_STYLE)
+STRUCTURE = {"svc", "group", "plain", "spacer", "legacy", "highlight"} | BORDER | set(GROUP_STYLE)
 
 
 def b64(s):
@@ -87,6 +91,7 @@ class Diagram:
         for n in self.nodes.values():
             n.icon_file = self.resolve_icon(n)
         for e in self.d.edges:
+            e.text = e.label
             for end in (e.src, e.dst):
                 if end not in self.nodes and (end not in self.groups or "plain" in self.groups[end].classes):
                     fail(f"矢印 {e.src} -> {e.dst} の {end} がノードでも枠でもありません（見えない枠や存在しない ID は矢印の端にできません）")
@@ -261,7 +266,13 @@ class Diagram:
                     continue
                 if all(inside):
                     for m, t in zip(members[1:], twins[1:]):
-                        t.pts = [(x + m.x - first.x, y + m.y - first.y) for x, y in e.pts]
+                        if getattr(m, "mirrored", False) != getattr(first, "mirrored", False):
+                            moved = [(m.x + m.w - (x - first.x), y + m.y - first.y) for x, y in e.pts]
+                        else:
+                            moved = [(x + m.x - first.x, y + m.y - first.y) for x, y in e.pts]
+                        # 枠の中の並びが写しになっていないと、写した線の端が相手からずれる
+                        if all(abs(a - b) <= 1 for p, q in ((moved[0], t.pts[0]), (moved[-1], t.pts[-1])) for a, b in zip(p, q)):
+                            t.pts = moved
                 else:
                     shared = self.ep_anchor(e.dst if inside[0] else e.src)[0 if row else 1]
                     n = len(members)
@@ -409,12 +420,15 @@ class Diagram:
         return pts
 
     def place_labels(self):
-        labeled = [e for e in self.d.edges if e.label]
         for e in self.d.edges:
             e.label_at = None
+            e.step = next((c[5:] for c in e.classes if c.startswith("step-") and c[5:].isdigit()), "")
+        labeled = [e for e in self.d.edges if e.label or e.step]
         for e in labeled:
-            e.label_w = max(self.font.width(line, EDGE_FONT) for line in e.label.split("\n")) + 2 * LABEL_PAD
-            e.label_h = (EDGE_FONT + 4) * (e.label.count("\n") + 1)
+            text_w = max(self.font.width(line, EDGE_FONT) for line in e.label.split("\n")) if e.label else 0
+            badge = BADGE + (BADGE_GAP if e.label else 0) if e.step else 0
+            e.label_w = text_w + badge + 2 * LABEL_PAD
+            e.label_h = max((EDGE_FONT + 4) * (e.label.count("\n") + 1), BADGE + 2)
         done = set()
         for key in ("src", "dst"):
             groups = defaultdict(list)
@@ -508,11 +522,13 @@ class Diagram:
         options = [v for v in options if not any(b0 < v < b1 for b0, b1 in blocked)]
         return min(options, key=lambda v: (abs(v - mid), v)) if options else None
 
-    def render(self, out_path):
-        texts = [o.label for o in self.objs.values() if o.label] + [e.label for e in self.d.edges if e.label]
+    def render(self, out_path, name):
+        texts = [o.label for o in self.objs.values() if o.label] + [e.label + e.step for e in self.d.edges]
         font = subset_font("".join(sorted(set("".join(texts)))))
         parts = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {self.width:g} {self.height:g}" width="{self.width:g}" height="{self.height:g}">',
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {self.width:g} {self.height:g}" width="{self.width:g}" height="{self.height:g}" role="img" aria-labelledby="diagram-title diagram-desc">',
+            f'<title id="diagram-title">{html.escape(name)}</title>',
+            f'<desc id="diagram-desc">{html.escape(self.describe())}</desc>',
             "<defs><style>"
             f'@font-face{{font-family:"diagram";src:url(data:font/woff;base64,{font}) format("woff")}}'
             'text{font-family:"diagram",sans-serif;fill:#000000}'
@@ -527,6 +543,7 @@ class Diagram:
         for g in sorted(self.groups.values(), key=lambda g: (g.id.count("."), g.id)):
             if "plain" not in g.classes:
                 parts.append(self.render_group(g))
+        parts.append(self.render_highlights())
         for e in self.d.edges:
             if hasattr(e, "pts"):
                 parts.append(self.render_edge(e))
@@ -534,6 +551,78 @@ class Diagram:
             parts.append(self.render_node(n))
         parts.append("</svg>")
         open(out_path, "w", encoding="utf-8").write("\n".join(parts) + "\n")
+
+    def describe(self):
+        """図の中身を文章にする（画像だけを読む LLM や読み上げ向け）。枠の入れ子と、矢印の一覧。"""
+        names = {}
+        for parent in [self.d.root] + [o for o in self.objs.values() if o.children]:
+            kids = [k for k in walk_visible(parent) if k.kind in ("node", "group") and k.label]
+            for k in kids:
+                names[k.id] = " ".join(k.label.split("\n"))
+            # 同じ枠の中で名前が重なるものには、並び順に番号を付ける
+            for label in {names[k.id] for k in kids}:
+                same = [k for k in kids if names[k.id] == label]
+                if len(same) > 1:
+                    for i, k in enumerate(same, 1):
+                        names[k.id] = f"{label} {i}"
+
+        def path(oid):
+            out, obj = [], self.objs[oid]
+            while obj is not None and obj.id:
+                if obj.id in names:
+                    out.insert(0, names[obj.id])
+                obj = obj.parent
+            return out
+
+        def name(oid):
+            """同じ名前が他にもあれば、区別できるところまで外側の枠の名前を前に付ける。"""
+            if oid not in names:
+                return oid
+            mine = path(oid)
+            others = [path(k) for k in names if k != oid and names[k] == names[oid]]
+            n = next((n for n in range(1, len(mine) + 1) if all(p[-n:] != mine[-n:] for p in others)), len(mine))
+            return " / ".join(mine[-n:])
+
+        lines = ["要素（字下げは枠の入れ子）:"]
+
+        def outline(obj, depth):
+            for child in obj.children:
+                if child.kind in ("spacer",):
+                    continue
+                if child.kind == "plain":
+                    outline(child, depth)
+                    continue
+                marks = [m for m, c in (("移行前", "legacy"), ("強調", "highlight")) if c in child.classes]
+                kind = "枠" if child.kind == "group" else "ノード"
+                lines.append(f"{'  ' * depth}- {names.get(child.id, child.id)}（{kind}{'、' + '、'.join(marks) if marks else ''}）")
+                outline(child, depth + 1)
+
+        outline(self.d.root, 0)
+        lines.append("矢印（呼ぶ側 → 呼ばれる側）:")
+        for e in self.d.edges:
+            marks = [m for m, c in (("非同期", "async"), ("破線", "dashed"), ("移行前", "legacy"), ("強調", "highlight")) if c in e.classes]
+            head = f"{e.step}. " if getattr(e, "step", "") else ""
+            label = f": {' '.join(e.text.split(chr(10)))}" if e.text else ""
+            lines.append(f"- {head}{name(e.src)} → {name(e.dst)}{label}{'（' + '、'.join(marks) + '）' if marks else ''}")
+        return "\n".join(lines)
+
+    def render_highlights(self):
+        """強調する枠・ノード・矢印の下に、蛍光ペンのような黄色の下地を引く。"""
+        out = ['<g class="marker-layer">']
+        for g in sorted(self.groups.values(), key=lambda g: g.id):
+            if "highlight" in g.classes:
+                out.append(f'<rect x="{g.x:g}" y="{g.y:g}" width="{g.w:g}" height="{g.h:g}" fill="none" stroke="{MARKER}" stroke-width="8" />')
+        for e in self.d.edges:
+            if "highlight" in e.classes and hasattr(e, "pts"):
+                out.append(f'<path d="{path_d(e.pts)}" fill="none" stroke="{MARKER}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />')
+        for n in sorted(self.nodes.values(), key=lambda n: n.id):
+            if "highlight" in n.classes:
+                boxes = [b for b in (icon_box(n), label_box(n)) if b]
+                x1, y1 = min(b[0] for b in boxes) - 6, min(b[1] for b in boxes) - 6
+                x2, y2 = max(b[2] for b in boxes) + 6, max(b[3] for b in boxes) + 4
+                out.append(f'<rect x="{x1:g}" y="{y1:g}" width="{x2 - x1:g}" height="{y2 - y1:g}" rx="6" fill="{MARKER_FILL}" stroke="{MARKER}" stroke-width="2" />')
+        out.append("</g>")
+        return "".join(out)
 
     def render_group(self, g):
         kind = group_kind(g)
@@ -559,6 +648,10 @@ class Diagram:
         box = icon_box(n)
         legacy = "legacy" in n.classes
         out = [f'<g class="{b64(n.id)} svc {" ".join(n.classes)}"><g class="shape">']
+        if BORDER & set(n.classes):
+            for b in (box, label_box(n)):
+                if b:
+                    out.append(f'<rect x="{b[0]:g}" y="{b[1]:g}" width="{b[2] - b[0]:g}" height="{b[3] - b[1]:g}" fill="#FFFFFF" />')
         out.append(f'<image href="{data_uri(n.icon_file)}" x="{box[0]:g}" y="{box[1]:g}" width="{ICON}" height="{ICON}"{gray_attr(legacy)} /></g>')
         if n.label:
             cx = n.x + n.ax
@@ -575,14 +668,31 @@ class Diagram:
         ident = b64(f"({e.src} -> {e.dst})[0]")
         out = [f'<g class="{ident} {" ".join(e.classes)}">']
         out.append(f'<path d="{path_d(e.pts)}" fill="none" stroke="{stroke}" stroke-width="1"{dash} class="connection" marker-end="url(#{marker})" />')
-        if e.label:
+        if e.label or e.step:
             x, y = e.label_at
             out.append(f'<rect x="{x - e.label_w / 2:g}" y="{y - e.label_h / 2:g}" width="{e.label_w:g}" height="{e.label_h:g}" fill="#FFFFFF" />')
-            for k, line in enumerate(e.label.split("\n")):
-                ty = y - e.label_h / 2 + (EDGE_FONT + 4) * k + EDGE_FONT
-                out.append(f'<text x="{x:g}" y="{ty:g}" style="text-anchor:middle;font-size:{EDGE_FONT}px{text_fill(legacy)}">{html.escape(line)}</text>')
+            tx = x
+            if e.step:
+                bx = x - e.label_w / 2 + LABEL_PAD + BADGE / 2
+                tx = (bx + BADGE / 2 + BADGE_GAP + x + e.label_w / 2 - LABEL_PAD) / 2
+                fill = LEGACY if legacy else "#232F3E"
+                out.append(f'<g class="step-badge"><circle cx="{bx:g}" cy="{y:g}" r="{BADGE / 2:g}" fill="{fill}" />')
+                out.append(f'<text x="{bx:g}" y="{y + EDGE_FONT * 0.35:g}" style="text-anchor:middle;font-size:{EDGE_FONT - 1}px;fill:#FFFFFF">{e.step}</text></g>')
+            lines = e.label.split("\n") if e.label else []
+            for k, line in enumerate(lines):
+                ty = y - (EDGE_FONT + 4) * len(lines) / 2 + (EDGE_FONT + 4) * k + EDGE_FONT
+                out.append(f'<text x="{tx:g}" y="{ty:g}" style="text-anchor:middle;font-size:{EDGE_FONT}px{text_fill(legacy)}">{html.escape(line)}</text>')
         out.append("</g>")
         return "".join(out)
+
+
+def walk_visible(parent):
+    """枠の直下の要素。見えない枠（plain）の中身は、その外側の枠の直下として数える。"""
+    for child in parent.children:
+        if child.kind == "plain":
+            yield from walk_visible(child)
+        else:
+            yield child
 
 
 def gray_attr(legacy):
@@ -676,7 +786,7 @@ def render(src, out_dir):
     diagram = Diagram(src)
     diagram.route()
     diagram.place_labels()
-    diagram.render(svg)
+    diagram.render(svg, name)
     png = os.path.join(out_dir, f"{name}.png")
     out = subprocess.run(["node", os.path.join(HERE, "check.mjs"), os.path.abspath(svg), os.path.abspath(png), diagram.d.direction], capture_output=True, text=True, check=True)
     result = json.loads(out.stdout)

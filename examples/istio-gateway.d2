@@ -15,7 +15,7 @@ aws: AWS Cloud {
 
   vpc: VPC {
     class: vpc
-    igw: Internet Gateway {class: internet-gateway}
+    igw: Internet Gateway {class: [internet-gateway; on-top]}
 
     public: パブリックサブネット {
       class: public-subnet
@@ -50,7 +50,7 @@ aws: AWS Cloud {
           class: k8s-namespace
           grid-columns: 3
           ing: Ingress {class: k8s-ingress}
-          gw: "Deployment istio-ingressgateway" {
+          gw: istio-ingressgateway {
             class: k8s-deployment
             grid-columns: 2
             p1: "Pod\nEnvoy" {class: k8s-pod}
