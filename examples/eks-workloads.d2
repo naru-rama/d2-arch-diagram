@@ -21,10 +21,15 @@ aws: AWS Cloud {
 
         batch: batch {
           class: k8s-namespace
+          grid-columns: 4
+          b1: {class: spacer}
+          b2: {class: spacer}
+          b3: {class: spacer}
           worker: "Deployment\nworker" {class: k8s-deployment}
         }
         shop: shop {
           class: k8s-namespace
+          grid-columns: 4
           web_svc: "Service\nweb" {class: k8s-service}
           web: "Deployment\nweb" {class: k8s-deployment}
           api_svc: "Service\napi" {class: k8s-service}
@@ -32,6 +37,10 @@ aws: AWS Cloud {
         }
         logging: amazon-cloudwatch {
           class: k8s-namespace
+          grid-columns: 4
+          l1: {class: spacer}
+          l2: {class: spacer}
+          l3: {class: spacer}
           fluentbit: "DaemonSet\nFluent Bit" {class: k8s-daemonset}
         }
       }
